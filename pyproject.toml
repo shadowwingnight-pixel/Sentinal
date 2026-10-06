@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinal"
+version = "0.2.0"
+description = "Defensive local TCP/UDP connection monitor"
+requires-python = ">=3.13"
+dependencies = ["psutil>=7.0,<8.0"]
+
+[project.scripts]
+sentinal = "sentinal.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
