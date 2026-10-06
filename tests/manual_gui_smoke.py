@@ -30,6 +30,8 @@ def check_live():
         assert "Local:" in app.detail_text.get("1.0", "end")
         assert "What is happening?" in app.detail_text.get("1.0", "end")
         assert "Why this score?" in app.detail_text.get("1.0", "end")
+        assert "Confidence:" in app.detail_text.get("1.0", "end")
+        assert "Assessment:" in app.detail_text.get("1.0", "end")
         app.notification_toggle.deselect()
         app._notification_setting()
         assert not app.notifications.gate.enabled

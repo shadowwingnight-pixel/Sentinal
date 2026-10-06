@@ -15,7 +15,8 @@ def explain_connection(connection: Connection) -> str:
     endpoint = connection.remote or connection.local
     service = service_name(connection.protocol, endpoint.port) if endpoint else None
     label = service or "Unknown service"
-    lines = [f"{assessment.level} [{assessment.score}/100]", f"{process} (PID {pid})"]
+    lines = [f"{assessment.level} [{assessment.score}/100]", f"{process} (PID {pid})",
+             f"Confidence: {assessment.confidence}"]
     if connection.remote:
         scope = classify_destination(connection.remote.ip)
         lines.append(f"Destination: {scope} {_safe_text(connection.remote.ip)} (port {connection.remote.port})")
@@ -37,6 +38,7 @@ def explain_connection(connection: Connection) -> str:
         lines.extend(f"- {reason.description} (+{reason.points})" for reason in assessment.reasons)
     else:
         lines.append("Reason: No configured risk signals added points (+0).")
+    lines.append(f"Assessment: {assessment.assessment}")
     return "\n".join(lines)
 
 

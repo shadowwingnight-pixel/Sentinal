@@ -65,7 +65,7 @@ class CliTests(unittest.TestCase):
     def test_threshold_is_inclusive_in_both_views(self):
         rows = (
             Connection("TCP", None, Endpoint("8.8.8.8", 443), "ESTABLISHED", 42, "browser.exe"),
-            Connection("TCP", None, Endpoint("8.8.8.8", 443), "ESTABLISHED", None, "Unknown"),
+            Connection("TCP", None, Endpoint("8.8.8.8", 5228), "ESTABLISHED", None, "Unknown"),
         )
         for flags in [[], ["--explain"]]:
             with self.subTest(flags=flags), \

@@ -45,8 +45,10 @@ def prepare_connection(row: Connection) -> ConnectionInfo:
     detail = (f"Process: {row.process_name}\nPID: {row.pid if row.pid is not None else '-'}\n"
               f"Connection: {row.protocol} / {scope}\nLocal: {format_endpoint(row.local)}\n"
               f"Remote: {format_endpoint(row.remote)}\nService: {service} / {endpoint.port if endpoint else '-'}\n"
-              f"State: {row.status}\nRisk: {score.score}/100\n\nWhat is happening?\n{explanation}\n\n"
+              f"State: {row.status}\nRisk: {score.score}/100 {score.priority}\nConfidence: {score.confidence}\n\nWhat is happening?\n{explanation}\n\n"
               f"Why this score?\n{reasons or 'No configured risk signals (+0).'}\n\n"
+              f"Assessment:\n{score.assessment}\n\n"
+              "Confidence describes heuristic evidence breadth, not malware probability.\n"
               "Port and hostname hints do not verify ownership, safety or maliciousness.")
     search = " ".join((row.process_name, str(row.pid), format_endpoint(row.local),
                        format_endpoint(row.remote), service, row.protocol)).casefold()

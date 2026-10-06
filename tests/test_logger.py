@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from sentinal.events import EventTracker
 from sentinal.logger import log_events
+from sentinal.monitor import Endpoint
 from test_events import row, snapshot
 
 
@@ -32,7 +33,7 @@ class LoggerTests(unittest.TestCase):
                          "risk_score", "severity", "reasons"})
 
     def test_severity_and_structured_reasons(self):
-        events = EventTracker().update(snapshot(replace(row(), process_name="Unknown")))
+        events = EventTracker().update(snapshot(replace(row(), process_name="Unknown", remote=Endpoint("8.8.8.8", 5228))))
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.jsonl"
             log_events(events, path)

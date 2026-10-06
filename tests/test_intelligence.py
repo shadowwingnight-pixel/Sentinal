@@ -9,7 +9,7 @@ from test_events import row
 class IntelligenceTests(unittest.TestCase):
     def setUp(self):
         self.normal = prepare_connection(row())
-        self.warning = prepare_connection(replace(row(), process_name="Unknown"))
+        self.warning = prepare_connection(replace(row(), process_name="Unknown", remote=Endpoint("8.8.8.8", 5228)))
         self.high = prepare_connection(replace(row(), process_name="Unknown", status="INVALID", remote=Endpoint("8.8.8.8", 4444)))
         self.entries = (self.normal, self.high, self.warning)
 
@@ -28,7 +28,7 @@ class IntelligenceTests(unittest.TestCase):
 
     def test_risk_sort_is_numeric_highest_first(self):
         ordered = sort_connections(list(self.entries))
-        self.assertEqual([entry.risk.score for entry in ordered], [70, 30, 10])
+        self.assertEqual([entry.risk.score for entry in ordered], [60, 30, 0])
         self.assertEqual(sort_connections(list(self.entries), descending=False)[0], self.normal)
 
     def test_header_sorting(self):
@@ -52,7 +52,7 @@ class IntelligenceTests(unittest.TestCase):
 
     def test_intelligence_detail_sections_and_reasons(self):
         for text in ["Process:", "PID:", "Connection:", "Service:", "State:", "Risk:",
-                     "What is happening?", "Why this score?", "(+20)"]:
+                     "What is happening?", "Why this score?", "(+20)", "Confidence: HIGH", "Assessment:"]:
             self.assertIn(text, self.high.detail)
 
     def test_activity_counts_and_window(self):

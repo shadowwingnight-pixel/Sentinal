@@ -68,6 +68,24 @@ class RiskAssessment:
     def level(self) -> str:
         return "GREEN" if self.score < 30 else "YELLOW" if self.score < 60 else "RED"
 
+    @property
+    def priority(self) -> str:
+        return "NORMAL" if self.score < 30 else "WARNING" if self.score < 60 else "HIGH"
+
+    @property
+    def confidence(self) -> str:
+        """Breadth of observed heuristic evidence, not malware probability."""
+        indicators = sum(reason.points >= 10 for reason in self.reasons)
+        return "HIGH" if indicators >= 3 else "MEDIUM" if indicators >= 2 else "LOW"
+
+    @property
+    def assessment(self) -> str:
+        if self.score < 30:
+            return "No strong suspicious indicators were observed."
+        if self.score < 60:
+            return "Observed socket metadata warrants review; maliciousness is not established."
+        return "Multiple socket metadata indicators warrant prompt review; maliciousness is not established."
+
 
 def is_routine_windows_activity(connection: Connection) -> bool:
     """Port/name context only, never a verified-process allowlist."""
@@ -99,9 +117,9 @@ def assess_connection(connection: Connection) -> RiskAssessment:
         reasons.append(RiskReason("Process could not be identified", 20))
     if connection.remote:
         if service_name(connection.protocol, connection.remote.port) is None:
-            reasons.append(RiskReason("Uncommon remote service port", 20))
-        if classify_destination(connection.remote.ip) == "INTERNET":
-            reasons.append(RiskReason("Public Internet destination (exposure context only)", 10))
+            reasons.append(RiskReason("Uncommon destination service (weak port-convention evidence)", 10))
+        # Public outbound destinations are expected and add no risk points.
+        # No name-based trust exemption is used for any outbound application.
     listening = connection.status == "LISTEN" or (connection.protocol == "UDP" and connection.remote is None)
     if listening and connection.local:
         try:
@@ -121,10 +139,12 @@ def assess_connection(connection: Connection) -> RiskAssessment:
                 points = 5 if service_name("UDP", port) else 10
                 reasons.append(RiskReason("UDP binding exposure only; a bound socket does not prove an inbound listener", points))
             elif address.is_unspecified:
-                reasons.append(RiskReason("Listening on all interfaces, potentially reachable beyond this machine", 20))
+                reasons.append(RiskReason("TCP listener on all interfaces; reachability depends on firewall/network", 10))
             else:
-                reasons.append(RiskReason("Listening on a public interface", 30))
+                reasons.append(RiskReason("TCP listener bound to a public interface, unlike ordinary outbound traffic", 20))
+            if connection.protocol == "TCP" and not windows_pattern and service_name("TCP", port) is None:
+                reasons.append(RiskReason("Uncommon local service on an externally-bound TCP listener", 15))
     expected = NORMAL_TCP_STATES if connection.protocol == "TCP" else {"NONE"}
     if connection.status not in expected:
-        reasons.append(RiskReason("Unexpected connection state", 20))
+        reasons.append(RiskReason("Unexpected connection state outside the normal protocol lifecycle", 30))
     return RiskAssessment(min(100, sum(reason.points for reason in reasons)), tuple(reasons))

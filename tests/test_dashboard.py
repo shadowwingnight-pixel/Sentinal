@@ -89,7 +89,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(values[0], "browser.exe")
         self.assertEqual(values[1], "8.8.8.8:443")
         self.assertEqual(values[2], "HTTPS")
-        self.assertEqual(values[4], "NORMAL  10/100")
+        self.assertEqual(values[4], "NORMAL  0/100")
         self.assertIn("Bound:", connection_values(replace(row(), remote=None, status="LISTEN"))[1])
 
     def test_restart_discards_old_display_updates(self):

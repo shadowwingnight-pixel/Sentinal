@@ -1,6 +1,6 @@
 # Sentinal
 
-Version 0.5: a Windows-focused Python 3.13+ monitor for the local machine's
+Version 0.6: a Windows-focused Python 3.13+ monitor for the local machine's
 TCP/UDP sockets, with the existing CLI and a native CustomTkinter dashboard.
 Runtime dependencies are psutil and CustomTkinter (plus its small dependencies).
 
@@ -156,13 +156,14 @@ The rules in `risk.py` are additive, capped at 100:
 | Missing PID or unknown/empty process name (outside teardown) | 20 |
 | Process name unavailable due to access permissions | 10 |
 | Exited/zombie process, or missing PID in TIME_WAIT/CLOSE | 5 |
-| Remote port absent from the protocol-specific common-service table | 20 |
-| Public Internet destination (exposure context only) | 10 |
+| Remote port absent from the protocol-specific common-service table (weak evidence) | 10 |
+| Public Internet destination | 0 |
 | Expected Windows service binding on wildcard/public interface | 5 |
 | Other UDP binding on wildcard/public interface: common/unknown local service | 5 / 10 |
-| Other TCP listener on all interfaces | 20 |
-| Other TCP listener on a public interface | 30 |
-| State outside the recognized TCP lifecycle states or UDP `NONE` | 20 |
+| Other TCP listener on all interfaces | 10 |
+| Other TCP listener on a public interface | 20 |
+| Uncommon local TCP service on a wildcard/public listener outside expected Windows patterns | 15 |
+| State outside the recognized TCP lifecycle states or UDP `NONE` | 30 |
 
 Binding rules are mutually exclusive. Normal TCP lifecycle
 states such as `SYN_SENT`, `TIME_WAIT`, and `CLOSE_WAIT` add no points by themselves.
@@ -184,10 +185,32 @@ pattern, not an allowlist or malware detector. A generic UDP bind alone cannot
 cross the alert threshold. Windows service port context follows
 [Microsoft's port reference](https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/service-overview-and-network-port-requirements).
 
-Example: a known process using HTTPS to a public IP scores 10. An unresolved
-process using an uncommon remote port on a private IP scores 40; on a public IP
-it scores 50. Explain mode lists the exact additions. An unfamiliar IP never
-adds reputation points.
+Risk Engine 2.0 separates normal outbound connectivity from interface-bound
+listeners. Public outbound destinations add no points. An identified process
+using public HTTPS scores 0; one using an uncommon destination port (including
+TCP 5228) scores 10/NORMAL regardless of process/vendor name. There is no
+ChatGPT/Chrome allowlist. Unidentified attribution (20) plus an uncommon port
+(10) scores 30/WARNING on either a LAN or Internet destination. Adding an
+abnormal protocol state (30) produces 60/HIGH. Ordinary TCP lifecycle states
+are not abnormal. A public TCP listener on an uncommon local service scores
+35/WARNING (20 exposure + 15 service context), unlike an outbound connection
+to the same public address. Loopback listeners add no exposure/service points.
+Existing Windows binding protections remain port/name context, not trusted
+process identities. Explain mode lists every addition and omits zero-point
+public-destination reasons. An unfamiliar IP never adds reputation points.
+
+The intelligence panel shows `Risk: N/100 NORMAL|WARNING|HIGH`, exact reasons,
+`Confidence: LOW|MEDIUM|HIGH`, and a short Assessment. CLI explanations also
+include confidence and assessment. Confidence describes evidence breadth:
+zero or one addition of at least 10 points = LOW; two = MEDIUM; three or more
+= HIGH. Teardown and routine-binding additions of 5 points do not increase
+confidence. Different attribution outcomes and mutually exclusive exposure
+rules never stack. A 30-point abnormal state alone can warrant WARNING while
+confidence remains LOW. These deterministic confidence labels are not measured
+probabilities, verified threat evidence or malware verdicts. Scores below 30
+state "No strong suspicious indicators were observed"; this does not prove
+safety. Historical JSONL records retain the score calculated by their original
+version; they are not rescored or rewritten.
 
 `INTERNET` means globally routable unicast address scope. `LOCAL` includes
 loopback, private, link-local, multicast, shared and other non-public address

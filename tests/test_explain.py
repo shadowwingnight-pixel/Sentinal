@@ -9,8 +9,8 @@ from test_risk import connection
 class ExplainTests(unittest.TestCase):
     def test_connected_service_and_exact_reasons(self):
         text = explain_connection(connection())
-        for value in ["GREEN [10/100]", "msedge.exe (PID 42)", "INTERNET 8.8.8.8",
-                      "HTTPS (443", "ESTABLISHED", "(+10)", "port-based hint"]:
+        for value in ["GREEN [0/100]", "msedge.exe (PID 42)", "INTERNET 8.8.8.8",
+                      "HTTPS (443", "ESTABLISHED", "(+0)", "port-based hint", "Confidence: LOW"]:
             self.assertIn(value, text)
 
     def test_listener_has_no_invented_destination(self):

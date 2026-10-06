@@ -4,6 +4,7 @@ import unittest
 from sentinal.alerts import alert_severity, format_event, risk_severity
 from sentinal.events import EventTracker
 from sentinal.risk import RiskAssessment
+from sentinal.monitor import Endpoint
 from test_events import row, snapshot
 
 
@@ -20,7 +21,7 @@ class AlertTests(unittest.TestCase):
                 self.assertIsNone(alert_severity(replace(changed, event_type="CLOSED")))
 
     def test_warning_wording(self):
-        event = EventTracker().update(snapshot(replace(row(), process_name="Unknown")))[0]
+        event = EventTracker().update(snapshot(replace(row(), process_name="Unknown", remote=Endpoint("8.8.8.8", 5228))))[0]
         text = format_event(event, alert_only=True)
         self.assertIn("[WARNING]", text)
         self.assertIn("Potentially unusual network activity detected.", text)
