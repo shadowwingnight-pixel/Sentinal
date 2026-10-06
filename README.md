@@ -1,7 +1,8 @@
 # Sentinal
 
-Version 0.3: a Windows-focused, CLI-first Python 3.13+ monitor for the local
-machine's TCP/UDP sockets. The only runtime dependency is psutil.
+Version 0.4: a Windows-focused Python 3.13+ monitor for the local machine's
+TCP/UDP sockets, with the existing CLI and a native CustomTkinter dashboard.
+Runtime dependencies are psutil and CustomTkinter (plus its small dependencies).
 
 ## Setup (PowerShell)
 
@@ -12,6 +13,38 @@ py -3.13 -m venv .venv
 ```
 
 ## Run
+
+Native Windows dashboard (requires Python's Tk support and a desktop session):
+
+```powershell
+.\.venv\Scripts\python.exe -m sentinal.gui
+```
+
+The dark dashboard starts monitoring automatically. Live Connections shows
+process, destination (or local bound endpoint), inferred service, state and risk.
+Select a row for PID, both endpoints, plain-English explanation and every risk
+addition. Summary cards count currently observed sockets (including listeners),
+warnings (30-59) and high risk (60-100). GUI indicators are NORMAL / WARNING / HIGH;
+CLI GREEN / YELLOW / RED thresholds are unchanged.
+
+Alerts and Event History retain the most recent 300 entries each from the current
+GUI session. Full events are appended to `logs/events.jsonl`; prior sessions
+remain in that file and are not loaded into the dashboard. Stop Monitoring
+immediately marks the view STOPPED and freezes the last displayed snapshot.
+Start becomes available after the previous worker finishes, preventing overlap.
+Restart preserves the event baseline, so unchanged sockets do not alert again;
+changes during the pause are inferred on the next poll. Close the window or use
+Ctrl+C to exit. No background monitoring is installed.
+
+`dashboard.py` performs polling and history writes on one background thread.
+`gui.py` consumes a bounded queue with Tk `after` callbacks; only the main thread
+touches widgets. Polling errors show VISIBILITY LIMITED and mark data as stale;
+history write failures appear in the status line. Stop/close never waits for a
+blocked OS read on the UI thread. The header's requested "SYSTEM PROTECTED"
+text describes the monitoring dashboard; Sentinal does not block threats or
+guarantee safety. The adjacent heuristic-priority note remains visible.
+
+Existing CLI commands:
 
 ```powershell
 .\.venv\Scripts\python.exe -m sentinal.cli
@@ -47,9 +80,14 @@ snapshots are best-effort and sockets/processes may change during collection.
 
 Tests use mocked psutil data and require no elevated permissions or network
 traffic. `monitor.py` returns immutable structured snapshots; `cli.py` owns
-formatting and refresh behavior. Future risk scoring, logging, threat intelligence,
-or GUI code can consume snapshots without changing collection or adding a
-framework now. Process-name caches expire with each snapshot.
+formatting and refresh behavior. GUI and CLI reuse the same snapshot, scoring,
+explanation, event, alert and JSONL modules. Process-name caches expire with each
+snapshot. Unit tests do not create a desktop window. To verify a real GUI window,
+live rows, selection, tabs, stop/start and clean shutdown:
+
+```powershell
+.\.venv\Scripts\python.exe tests/manual_gui_smoke.py
+```
 
 ## Explain and risk mode
 
@@ -70,19 +108,36 @@ The rules in `risk.py` are additive, capped at 100:
 
 | Signal | Points |
 | --- | ---: |
-| Missing PID or unresolved/empty process name | 20 |
+| Missing PID or unknown/empty process name (outside teardown) | 20 |
+| Process name unavailable due to access permissions | 10 |
+| Exited/zombie process, or missing PID in TIME_WAIT/CLOSE | 5 |
 | Remote port absent from the protocol-specific common-service table | 20 |
 | Public Internet destination (exposure context only) | 10 |
-| TCP listener or bound UDP socket on all interfaces | 20 |
-| TCP listener or bound UDP socket on a public interface | 30 |
+| Expected Windows service binding on wildcard/public interface | 5 |
+| Other UDP binding on wildcard/public interface: common/unknown local service | 5 / 10 |
+| Other TCP listener on all interfaces | 20 |
+| Other TCP listener on a public interface | 30 |
 | State outside the recognized TCP lifecycle states or UDP `NONE` | 20 |
 
-The two listening-interface rules are mutually exclusive. Normal TCP lifecycle
+Binding rules are mutually exclusive. Normal TCP lifecycle
 states such as `SYN_SENT`, `TIME_WAIT`, and `CLOSE_WAIT` add no points by themselves.
 Private-interface listeners add no interface points. Bound UDP sockets do not
 prove inbound reachability; wildcard/public binds only indicate possible exposure.
 Firewall rules are not inspected. Missing remote endpoints incur no uncommon-port
 points; listeners show their local port's service hint instead.
+
+Windows context reduces false positives without exempting a process name:
+`svchost.exe` / `System` bound UDP on NTP (123), NetBIOS (137/138), SSDP (1900),
+peer discovery (2177), IKE/IPsec (500/4500), mDNS (5353) or LLMNR (5355) contributes
+only 5 exposure points. TCP RPC (135) or dynamic RPC range (49152-65535) under
+`svchost.exe`, `services.exe`, `lsass.exe`, or `wininit.exe`, and System SMB
+(139/445), also contribute 5. A PID must be available for these context hints.
+No executable signature, path or service identity is verified. A name can be
+spoofed; unrelated ports, outbound connections, unknown attribution and
+unexpected states are still scored normally. This is a conservative port/name
+pattern, not an allowlist or malware detector. A generic UDP bind alone cannot
+cross the alert threshold. Windows service port context follows
+[Microsoft's port reference](https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/service-overview-and-network-port-requirements).
 
 Example: a known process using HTTPS to a public IP scores 10. An unresolved
 process using an uncommon remote port on a private IP scores 40; on a public IP
@@ -99,7 +154,7 @@ Service names come from fixed TCP/UDP port conventions, including web, DNS,
 mail, SSH, RDP and common Windows services. They do not verify application
 protocols, encryption, ownership or legitimacy. No DNS lookup or network request
 is performed. `explain.py` owns presentation; `risk.py` owns service hints,
-address classification and scoring. No new dependencies were added.
+address classification and scoring. Scoring performs no external queries.
 
 ## Events, alerts and history
 
@@ -141,17 +196,19 @@ payloads are collected. Socket addresses and process names are local metadata;
 `logs/` is ignored by Git. History persists across runs, but each new run starts
 a fresh baseline and may log the same currently active sockets again.
 
-`--no-log` disables history in every mode without creating a directory or file.
+CLI `--no-log` disables history in every CLI mode without creating a directory or file.
 Write failures report a diagnostic without stopping monitoring; failed batches
 are not retried to avoid duplicate entries and may be partially written. No
 automatic rotation is configured. `events.py` handles comparison, `alerts.py`
 handles alert selection/presentation, and `logger.py` handles allowlisted JSONL
-persistence. No new dependencies or external APIs were added.
+persistence. GUI history is enabled by default; no external APIs are used.
 
 ## Scope
 
 Strictly defensive local monitoring using existing OS socket metadata. No remote
 targets, scanning, exploitation, credentials, persistence, evasion, packet capture,
-or outbound requests. No GUI in this milestone.
+or outbound requests. No packet interception, firewall modification or process
+termination is performed.
 
 API reference: [psutil documentation](https://psutil.io/).
+GUI reference: [CustomTkinter documentation](https://customtkinter.tomschimansky.com/documentation/).

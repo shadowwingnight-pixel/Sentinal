@@ -30,14 +30,15 @@ class RiskTests(unittest.TestCase):
     def test_public_unknown_service_and_unexpected_state(self):
         result = assess_connection(replace(connection(), process_name="Access denied",
                                             remote=Endpoint("8.8.8.8", 4444), status="INVALID"))
-        self.assertEqual(result.score, 70)
+        self.assertEqual(result.score, 60)
         self.assertEqual(result.level, "RED")
-        self.assertEqual(sum(reason.points for reason in result.reasons), 70)
+        self.assertEqual(sum(reason.points for reason in result.reasons), 60)
 
     def test_unresolved_process_markers(self):
-        for name in ["Unknown", "unknown process", "Access denied", "Process exited", "Zombie process", ""]:
+        for name, expected in [("Unknown", 30), ("unknown process", 30), ("Access denied", 20),
+                               ("Process exited", 15), ("Zombie process", 15), ("", 30)]:
             with self.subTest(name=name):
-                self.assertEqual(assess_connection(replace(connection(), process_name=name)).score, 30)
+                self.assertEqual(assess_connection(replace(connection(), process_name=name)).score, expected)
 
     def test_listening_interfaces(self):
         for ip, points in [("127.0.0.1", 0), ("::1", 0), ("192.168.1.5", 0),
@@ -48,6 +49,48 @@ class RiskTests(unittest.TestCase):
 
     def test_udp_bound_socket_is_not_an_unknown_remote_service(self):
         row = replace(connection(), protocol="UDP", local=Endpoint("::", 54321), remote=None, status="NONE")
+        self.assertEqual(assess_connection(row).score, 10)
+
+    def test_windows_udp_service_bindings_are_low_priority(self):
+        for name in ["svchost.exe", "System"]:
+            for port in [123, 137, 1900, 2177, 5353, 5355]:
+                for ip in ["0.0.0.0", "::", "8.8.8.8", "2606:4700:4700::1111"]:
+                    row = replace(connection(), protocol="UDP", remote=None, status="NONE",
+                                  process_name=name, local=Endpoint(ip, port))
+                    result = assess_connection(row)
+                    self.assertEqual(result.score, 5)
+                    self.assertIn("not identity verification", result.reasons[0].description)
+
+    def test_windows_rpc_and_smb_patterns(self):
+        for name, port in [("svchost.exe", 135), ("svchost.exe", 49666), ("lsass.exe", 49664),
+                           ("services.exe", 49684), ("System", 445)]:
+            row = replace(connection(), remote=None, status="LISTEN", process_name=name,
+                          local=Endpoint("0.0.0.0", port))
+            self.assertEqual(assess_connection(row).score, 5)
+
+    def test_system_name_is_not_a_blanket_exemption(self):
+        row = replace(connection(), remote=None, status="LISTEN", process_name="svchost.exe",
+                      local=Endpoint("8.8.8.8", 4444))
+        self.assertEqual(assess_connection(row).score, 30)
+        outbound = replace(connection(), process_name="svchost.exe", remote=Endpoint("8.8.8.8", 4444))
+        self.assertEqual(assess_connection(outbound).score, 30)
+
+    def test_unresolved_bind_and_state_still_accumulate_risk(self):
+        row = replace(connection(), protocol="UDP", remote=None, status="INVALID", pid=None,
+                      process_name="Unknown", local=Endpoint("0.0.0.0", 4444))
+        self.assertEqual(assess_connection(row).score, 50)
+
+    def test_udp_unknown_bind_alone_never_alerts(self):
+        for ip in ["0.0.0.0", "8.8.8.8"]:
+            row = replace(connection(), protocol="UDP", remote=None, status="NONE", local=Endpoint(ip, 54321))
+            self.assertEqual(assess_connection(row).score, 10)
+
+    def test_time_wait_attribution_race(self):
+        row = replace(connection(), pid=None, process_name="Unknown", status="TIME_WAIT")
+        self.assertEqual(assess_connection(row).score, 15)
+
+    def test_ipv4_mapped_wildcard_exposure(self):
+        row = replace(connection(), remote=None, status="LISTEN", local=Endpoint("::ffff:0.0.0.0", 443))
         self.assertEqual(assess_connection(row).score, 20)
 
     def test_normal_lifecycle_states(self):

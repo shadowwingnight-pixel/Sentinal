@@ -20,7 +20,10 @@ UDP_SERVICES = {
     137: "NetBIOS", 138: "NetBIOS", 161: "SNMP", 162: "SNMP trap",
     443: "HTTPS / QUIC", 500: "IKE", 1900: "SSDP", 3389: "RDP",
     4500: "IPsec NAT traversal", 5353: "mDNS", 5355: "LLMNR",
+    2177: "Windows peer discovery",
 }
+WINDOWS_UDP_PORTS = {123, 137, 138, 1900, 2177, 500, 4500, 5353, 5355}
+WINDOWS_RPC_NAMES = {"svchost.exe", "services.exe", "lsass.exe", "wininit.exe"}
 UNRESOLVED_NAMES = {"unknown", "unknown process", "access denied", "process exited", "zombie process"}
 NORMAL_TCP_STATES = {
     "ESTABLISHED", "LISTEN", "SYN_SENT", "SYN_RECV", "FIN_WAIT1",
@@ -69,8 +72,13 @@ class RiskAssessment:
 def assess_connection(connection: Connection) -> RiskAssessment:
     """Add only documented signals, without reputation or remote lookups."""
     reasons: list[RiskReason] = []
-    if (connection.pid is None or not connection.process_name.strip()
-            or connection.process_name.strip().casefold() in UNRESOLVED_NAMES):
+    name = connection.process_name.strip().casefold()
+    if name == "access denied":
+        reasons.append(RiskReason("Process name unavailable due to permissions, not suspicious identity", 10))
+    elif name in {"process exited", "zombie process"} or (
+            connection.pid is None and connection.status in {"TIME_WAIT", "CLOSE"}):
+        reasons.append(RiskReason("Process attribution unavailable during socket/process teardown", 5))
+    elif connection.pid is None or not name or name in UNRESOLVED_NAMES:
         reasons.append(RiskReason("Process could not be identified", 20))
     if connection.remote:
         if service_name(connection.protocol, connection.remote.port) is None:
@@ -83,10 +91,28 @@ def assess_connection(connection: Connection) -> RiskAssessment:
             address = ipaddress.ip_address(connection.local.ip.split("%", 1)[0])
         except ValueError:
             address = None
-        if address is not None and address.is_unspecified:
-            reasons.append(RiskReason("Listening/bound on all interfaces, potentially reachable beyond this machine", 20))
-        elif classify_destination(connection.local.ip) == "INTERNET":
-            reasons.append(RiskReason("Listening/bound on a public interface", 30))
+        if address is not None and isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        exposed = address is not None and (address.is_unspecified or
+                                           classify_destination(connection.local.ip) == "INTERNET")
+        if exposed:
+            port = connection.local.port
+            windows_pattern = connection.pid is not None and (
+                (connection.protocol == "UDP" and name in {"svchost.exe", "system"}
+                 and port in WINDOWS_UDP_PORTS)
+                or (connection.protocol == "TCP" and name in WINDOWS_RPC_NAMES
+                    and (port == 135 or 49152 <= port <= 65535))
+                or (connection.protocol == "TCP" and name == "system" and port in {139, 445})
+            )
+            if windows_pattern:
+                reasons.append(RiskReason("Common Windows service binding pattern; name/port hints are not identity verification", 5))
+            elif connection.protocol == "UDP":
+                points = 5 if service_name("UDP", port) else 10
+                reasons.append(RiskReason("UDP binding exposure only; a bound socket does not prove an inbound listener", points))
+            elif address.is_unspecified:
+                reasons.append(RiskReason("Listening on all interfaces, potentially reachable beyond this machine", 20))
+            else:
+                reasons.append(RiskReason("Listening on a public interface", 30))
     expected = NORMAL_TCP_STATES if connection.protocol == "TCP" else {"NONE"}
     if connection.status not in expected:
         reasons.append(RiskReason("Unexpected connection state", 20))
