@@ -7,6 +7,7 @@ from threading import Event, Thread
 from .events import ConnectionEvent, EventTracker
 from .logger import log_events
 from .monitor import Snapshot, collect_snapshot
+from .intelligence import ConnectionInfo, prepare_connection
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,7 @@ class PollResult:
     snapshot: Snapshot | None
     events: tuple[ConnectionEvent, ...] = ()
     diagnostic: str | None = None
+    entries: tuple[ConnectionInfo, ...] = ()
 
 
 class MonitorWorker:
@@ -57,7 +59,8 @@ class MonitorWorker:
                     break
                 events = self._tracker.update(snapshot)
                 diagnostic = log_events(events) if self._logging else None
-                result = PollResult(snapshot, events, diagnostic)
+                entries = tuple(prepare_connection(row) for row in snapshot.connections)
+                result = PollResult(snapshot, events, diagnostic, entries)
             except Exception as error:
                 # Boundary for unexpected collector failures; permit later recovery.
                 result = PollResult(None, diagnostic=f"Polling failed: {error}")

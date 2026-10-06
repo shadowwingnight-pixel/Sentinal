@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sentinal"
-version = "0.4.0"
+version = "0.5.0"
 description = "Defensive local TCP/UDP connection monitor"
 requires-python = ">=3.13"
 dependencies = ["psutil>=7.0,<8.0", "customtkinter>=5.2,<6.0"]

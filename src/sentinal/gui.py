@@ -3,6 +3,7 @@
 from collections import deque
 from queue import Empty
 import tkinter as tk
+import time
 from tkinter import ttk
 
 import customtkinter as ctk
@@ -11,9 +12,11 @@ from .alerts import alert_severity, format_event
 from .cli import format_endpoint
 from .dashboard import MonitorWorker, PollResult
 from .events import ConnectionEvent, connection_identity
-from .explain import explain_connection
 from .monitor import Connection
 from .risk import assess_connection, service_name
+from .intelligence import ActivityHistory, ConnectionInfo, filter_connections, sort_connections
+from .dns import DNSResolver
+from .notifications import NotificationWorker
 
 BACKGROUND = "#0b1220"
 PANEL = "#111d30"
@@ -46,7 +49,15 @@ class SentinalApp(ctk.CTk):
         self._rows: dict[str, Connection] = {}
         self._history: deque[ConnectionEvent] = deque(maxlen=300)
         self._alerts: deque[ConnectionEvent] = deque(maxlen=300)
+        self._entries: tuple[ConnectionInfo, ...] = ()
+        self._visible: dict[str, ConnectionInfo] = {}
+        self._sort_column, self._descending = "Risk", True
+        self._filter_job = None
+        self.activity = ActivityHistory()
+        self.dns = DNSResolver()
+        self._dns_revision = 0
         self._build()
+        self.notifications = NotificationWorker(self.winfo_id())
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.bind("<Control-c>", lambda _event: self.close())
         self.after(100, self._drain)
@@ -76,6 +87,13 @@ class SentinalApp(ctk.CTk):
                                   text_color=list(COLORS.values())[index])
             number.pack(anchor="w", padx=20, pady=(0, 14))
             self.counts.append(number)
+        graph_frame = ctk.CTkFrame(self, fg_color=PANEL)
+        graph_frame.pack(fill="x", padx=24, pady=(0, 8))
+        ctk.CTkLabel(graph_frame, text="LIVE ACTIVITY  •  60 seconds    Connections / Events per poll",
+                     text_color="#91a6bf", font=("Segoe UI", 11)).pack(anchor="w", padx=14)
+        self.graph = tk.Canvas(graph_frame, height=65, background=PANEL, highlightthickness=0)
+        self.graph.pack(fill="x", padx=14, pady=(0, 6))
+        self.graph.bind("<Configure>", lambda _event: self._draw_graph())
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=24, pady=(0, 10))
         body.columnconfigure(0, weight=3)
@@ -86,7 +104,26 @@ class SentinalApp(ctk.CTk):
         live = tabs.add("Live Connections")
         alerts = tabs.add("Alerts")
         history = tabs.add("Event History")
-        self.table = self._table(live)
+        toolbar = ctk.CTkFrame(live, fg_color="transparent")
+        toolbar.pack(fill="x", pady=(0, 8))
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *_args: self._schedule_filter())
+        ctk.CTkLabel(toolbar, text="Search", text_color="#91a6bf").pack(side="left", padx=(0, 8))
+        ctk.CTkEntry(toolbar, placeholder_text="Search process, IP, port or service", textvariable=self.search_var,
+                     width=260).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.level = ctk.CTkOptionMenu(toolbar, values=["All", "Normal", "Warning", "High Risk"],
+                                      command=lambda _value: self._schedule_filter(), width=110)
+        self.level.pack(side="right")
+        options = ctk.CTkFrame(live, fg_color="transparent")
+        options.pack(fill="x", pady=(0, 8))
+        self.hide_routine = ctk.CTkCheckBox(options, text="Hide routine Windows activity", command=self._schedule_filter)
+        self.hide_routine.pack(side="left")
+        self.notification_toggle = ctk.CTkSwitch(options, text="Desktop Notifications ON", command=self._notification_setting)
+        self.notification_toggle.select()
+        self.notification_toggle.pack(side="right")
+        table_frame = ctk.CTkFrame(live, fg_color="transparent")
+        table_frame.pack(fill="both", expand=True)
+        self.table = self._table(table_frame)
         self.table.bind("<<TreeviewSelect>>", self._select)
         self.alert_text = self._event_view(alerts, "Security alerts • recent session activity")
         self.history_text = self._event_view(history, "Event history • last 300 events this session; full history in logs/events.jsonl")
@@ -113,7 +150,7 @@ class SentinalApp(ctk.CTk):
         columns = ("Process", "Destination", "Service", "Status", "Risk")
         table = ttk.Treeview(parent, columns=columns, show="headings", style="Sentinal.Treeview", selectmode="browse")
         for name, width in zip(columns, (160, 250, 140, 120, 145)):
-            table.heading(name, text=name)
+            table.heading(name, text=name, command=lambda column=name: self._sort(column))
             table.column(name, width=width, minwidth=100)
         for label, color in COLORS.items():
             table.tag_configure(label, foreground=color)
@@ -144,7 +181,87 @@ class SentinalApp(ctk.CTk):
         if selection and selection[0] in self._rows:
             row = self._rows[selection[0]]
             self._selected_identity = connection_identity(row)
-            self._text(self.detail_text, f"Local: {format_endpoint(row.local)}\nRemote: {format_endpoint(row.remote)}\nProtocol: {row.protocol}\n\n" + explain_connection(row))
+            info = self._visible[selection[0]]
+            hostname = self.dns.get(row.remote.ip) if row.remote else None
+            self._text(self.detail_text, (f"Hostname: {hostname}\n\n" if hostname else "") + info.detail)
+
+    def _notification_setting(self) -> None:
+        enabled = bool(self.notification_toggle.get())
+        self.notifications.gate.enabled = enabled
+        self.notification_toggle.configure(text=f"Desktop Notifications {'ON' if enabled else 'OFF'}")
+
+    def _schedule_filter(self) -> None:
+        if self._filter_job:
+            self.after_cancel(self._filter_job)
+        self._filter_job = self.after(150, self._render_table)
+
+    def _sort(self, column: str) -> None:
+        self._descending = not self._descending if column == self._sort_column else column == "Risk"
+        self._sort_column = column
+        self._render_table()
+
+    def _render_table(self) -> None:
+        if self._filter_job:
+            self.after_cancel(self._filter_job)
+        self._filter_job = None
+        if self._closing:
+            return
+        hostnames = {}
+        for info in self._entries:
+            if info.connection.remote:
+                ip = info.connection.remote.ip
+                name = self.dns.get(ip)
+                if name:
+                    hostnames[ip] = name
+        entries = sort_connections(filter_connections(self._entries, self.search_var.get(), self.level.get(),
+                                                      bool(self.hide_routine.get()), hostnames),
+                                   self._sort_column, self._descending)
+        scroll_position = self.table.yview()[0]
+        self.table.delete(*self.table.get_children())
+        self._rows.clear()
+        self._visible.clear()
+        for index, info in enumerate(entries):
+            row = info.connection
+            key = str(index)
+            self._rows[key], self._visible[key] = row, info
+            endpoint = row.remote or row.local
+            destination = format_endpoint(row.remote) if row.remote else "Bound: " + format_endpoint(row.local)
+            if row.remote:
+                name = hostnames.get(row.remote.ip)
+                destination = f"{name} | {row.remote.ip}" if name else f"{info.scope} | {row.remote.ip}"
+            values = (row.process_name, destination, f"{info.service} / {endpoint.port if endpoint else '-'}",
+                      row.status, f"{risk_label(info.risk.score)} {info.risk.score}/100")
+            self.table.insert("", "end", iid=key, values=values, tags=(risk_label(info.risk.score),))
+            if connection_identity(row) == self._selected_identity:
+                self.table.selection_set(key)
+        self.table.yview_moveto(scroll_position)
+        if self._selected_identity is not None and not self.table.selection():
+            self._text(self.detail_text, "Selected connection is hidden by the current filters. Select a visible row.")
+        for column in self.table["columns"]:
+            marker = " ▼" if self._descending else " ▲"
+            self.table.heading(column, text=column + (marker if column == self._sort_column else ""))
+        self._select()
+
+    def _draw_graph(self) -> None:
+        now = time.monotonic()
+        self.activity.prune(now)
+        self.graph.delete("all")
+        width, height = max(100, self.graph.winfo_width()), 60
+        samples = list(self.activity.samples)
+        scale = max([1] + [max(sample.connections, sample.events) for sample in samples])
+        self.graph.create_line(0, height, width, height, fill="#28405e")
+        self.graph.create_text(4, 4, text=f"Scale 0–{scale}  •  green: connections  /  amber: changes",
+                               anchor="nw", fill="#91a6bf", font=("Segoe UI", 9))
+        for field, color in (("connections", COLORS["NORMAL"]), ("events", COLORS["WARNING"])):
+            points = []
+            for sample in samples:
+                points.extend((max(0, (sample.time - now + 60) / 60 * width),
+                               height - getattr(sample, field) / scale * (height - 18)))
+            if len(points) >= 4:
+                self.graph.create_line(*points, fill=color, width=2)
+            elif points:
+                x, y = points
+                self.graph.create_oval(x-2, y-2, x+2, y+2, fill=color, outline=color)
 
     def _apply(self, result: PollResult) -> None:
         if result.snapshot is None or result.snapshot.warning:
@@ -155,24 +272,19 @@ class SentinalApp(ctk.CTk):
             snapshot = result.snapshot
             self.state_label.configure(text="SYSTEM PROTECTED | MONITORING LIVE", text_color=COLORS["NORMAL"])
             rows = {connection_identity(row): row for row in snapshot.connections}
-            scores = [assess_connection(row).score for row in rows.values()]
+            self._entries = result.entries
+            scores = [info.risk.score for info in self._entries]
             for label, value in zip(self.counts, (len(rows), sum(30 <= score < 60 for score in scores), sum(score >= 60 for score in scores))):
                 label.configure(text=str(value))
-            scroll_position = self.table.yview()[0]
-            self.table.delete(*self.table.get_children())
-            self._rows.clear()
-            for index, row in enumerate(rows.values()):
-                key = str(index)
-                self._rows[key] = row
-                self.table.insert("", "end", iid=key, values=connection_values(row), tags=(risk_label(assess_connection(row).score),))
-                if connection_identity(row) == self._selected_identity:
-                    self.table.selection_set(key)
-            self.table.yview_moveto(scroll_position)
+            self._render_table()
+            self.activity.add(time.monotonic(), len(rows), len(result.events))
+            self._draw_graph()
             if self._selected_identity is not None and self._selected_identity not in rows:
                 self._selected_identity = None
                 self._text(self.detail_text, "Selected socket disappeared. Select another connection.")
             self.status.configure(text=result.diagnostic or f"Updated {snapshot.timestamp.strftime('%H:%M:%S')} • {len(result.events)} changes • local passive monitoring")
         self._history.extend(result.events)
+        self.notifications.submit(result.events)
         self._alerts.extend(event for event in result.events if alert_severity(event))
         if result.events:
             self._text(self.history_text, "\n\n".join(format_event(event) for event in reversed(self._history)))
@@ -191,6 +303,10 @@ class SentinalApp(ctk.CTk):
                 self._apply(result)
         if not self.monitoring and not self.worker.running:
             self.control.configure(state="normal")
+        if self.dns.revision != self._dns_revision:
+            self._dns_revision = self.dns.revision
+            if self._filter_job is None:
+                self._schedule_filter()
         self.after(100, self._drain)
 
     def start_monitoring(self) -> None:
@@ -210,9 +326,21 @@ class SentinalApp(ctk.CTk):
             self.start_monitoring()
 
     def close(self) -> None:
+        if self._closing:
+            return
         self._closing = True
         self.worker.stop()
-        self.destroy()
+        self.dns.close()
+        self.notifications.close()
+        self.withdraw()
+        self._close_deadline = time.monotonic() + 3
+        self._finish_close()
+
+    def _finish_close(self) -> None:
+        if (self.worker.running or self.dns.running or self.notifications.running) and time.monotonic() < self._close_deadline:
+            self.after(50, self._finish_close)
+        else:
+            self.destroy()
 
 
 def main() -> None:

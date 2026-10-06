@@ -1,6 +1,6 @@
 # Sentinal
 
-Version 0.4: a Windows-focused Python 3.13+ monitor for the local machine's
+Version 0.5: a Windows-focused Python 3.13+ monitor for the local machine's
 TCP/UDP sockets, with the existing CLI and a native CustomTkinter dashboard.
 Runtime dependencies are psutil and CustomTkinter (plus its small dependencies).
 
@@ -27,6 +27,42 @@ addition. Summary cards count currently observed sockets (including listeners),
 warnings (30-59) and high risk (60-100). GUI indicators are NORMAL / WARNING / HIGH;
 CLI GREEN / YELLOW / RED thresholds are unchanged.
 
+Search matches process, PID, local/remote IP and port, service and resolved
+hostname (case-insensitive; multiple words must all match). Choose All, Normal,
+Warning or High Risk. Hide routine Windows activity hides only low-priority
+Windows port/name patterns; it never hides warnings or high risk. Filters affect
+the live table only: summary cards, alerts and event logging retain all activity.
+The table starts sorted by descending numeric risk. Click a header to sort;
+click again to reverse. Selected details separate "What is happening?" from
+"Why this score?" and list each point addition. Process names and port conventions
+are context hints, never verified identities or evidence of malware.
+
+Remote scope is shown as Loopback, LAN / non-public, or Internet. When available,
+the table shows a reverse-DNS hostname beside the IP, and service / port in its
+own column. Hostnames come from the configured OS resolver and are untrusted
+labels; Sentinal does not invent company attribution. This may cause ordinary
+DNS queries through your configured DNS service (including public DNS if so
+configured); it does not contact any threat-intelligence or geolocation API.
+The CLI does not perform DNS queries. One dedicated DNS worker uses a hidden
+resolver helper with a 2-second lookup timeout, queue limit 64, and a 512-entry
+LRU cache: successful results last 5 minutes, failures 1 minute. While pending,
+unresolvable or saturated, IPs remain visible. No shell commands are constructed
+from addresses. The timeout cleans up only Sentinal's own lookup helper, never
+an observed application. Python/OS process startup can add to lookup time.
+
+A lightweight Tk canvas graph shows connection count and events per poll over
+approximately 60 seconds, on a shared labeled scale. Counts are observed sockets
+and snapshot changes, not traffic volume. The graph uses bounded samples and no
+plotting dependency. During Stop Monitoring the last chart remains frozen.
+
+Desktop Notifications ON/OFF is a GUI-only toggle (default ON). Only newly
+observed HIGH events produce native Windows notifications. A batch is combined
+into one message, with a 30-second cooldown; unchanged entries, warnings, closed
+events and disabled-period alerts are not replayed. Alerts suppressed by cooldown
+remain visible in the Alerts tab and JSONL history. Notification delivery respects
+Windows quiet time and may be disabled by OS settings. A single notification
+worker and one transient tray icon are used; the icon is removed on close.
+
 Alerts and Event History retain the most recent 300 entries each from the current
 GUI session. Full events are appended to `logs/events.jsonl`; prior sessions
 remain in that file and are not loaded into the dashboard. Stop Monitoring
@@ -43,6 +79,14 @@ history write failures appear in the status line. Stop/close never waits for a
 blocked OS read on the UI thread. The header's requested "SYSTEM PROTECTED"
 text describes the monitoring dashboard; Sentinal does not block threats or
 guarantee safety. The adjacent heuristic-priority note remains visible.
+
+Metadata preparation runs on the polling worker. Search is debounced, filtering
+uses prepared strings, and DNS/notification work never touches Tk. There are
+three fixed application worker threads (polling, DNS, notifications), bounded
+queues/history/caches, and at most one DNS helper process. Closing signals all
+workers, hides the window and waits asynchronously up to 3 seconds for cleanup;
+an uninterruptible OS collection call may outlast that grace period, so worker
+threads are daemonized as a final exit safeguard. No monitoring remains installed.
 
 Existing CLI commands:
 
@@ -83,7 +127,8 @@ traffic. `monitor.py` returns immutable structured snapshots; `cli.py` owns
 formatting and refresh behavior. GUI and CLI reuse the same snapshot, scoring,
 explanation, event, alert and JSONL modules. Process-name caches expire with each
 snapshot. Unit tests do not create a desktop window. To verify a real GUI window,
-live rows, selection, tabs, stop/start and clean shutdown:
+live rows, a 550-row load, search, sorting, detail sections, graph, notifications
+toggle, tabs, stop/start and clean shutdown:
 
 ```powershell
 .\.venv\Scripts\python.exe tests/manual_gui_smoke.py
@@ -207,7 +252,8 @@ persistence. GUI history is enabled by default; no external APIs are used.
 
 Strictly defensive local monitoring using existing OS socket metadata. No remote
 targets, scanning, exploitation, credentials, persistence, evasion, packet capture,
-or outbound requests. No packet interception, firewall modification or process
+or unsolicited network probes. The GUI's optional hostname presentation uses
+normal OS reverse DNS only. No packet interception, firewall modification or process
 termination is performed.
 
 API reference: [psutil documentation](https://psutil.io/).

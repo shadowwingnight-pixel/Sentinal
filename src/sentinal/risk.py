@@ -69,6 +69,23 @@ class RiskAssessment:
         return "GREEN" if self.score < 30 else "YELLOW" if self.score < 60 else "RED"
 
 
+def is_routine_windows_activity(connection: Connection) -> bool:
+    """Port/name context only, never a verified-process allowlist."""
+    if connection.pid is None or connection.remote is not None or connection.local is None:
+        return False
+    name = connection.process_name.strip().casefold()
+    port = connection.local.port
+    return (
+        connection.protocol == "UDP" and connection.status == "NONE"
+        and name in {"svchost.exe", "system"} and port in WINDOWS_UDP_PORTS
+    ) or (
+        connection.protocol == "TCP" and connection.status == "LISTEN" and (
+            name in WINDOWS_RPC_NAMES and (port == 135 or 49152 <= port <= 65535)
+            or name == "system" and port in {139, 445}
+        )
+    )
+
+
 def assess_connection(connection: Connection) -> RiskAssessment:
     """Add only documented signals, without reputation or remote lookups."""
     reasons: list[RiskReason] = []
@@ -97,13 +114,7 @@ def assess_connection(connection: Connection) -> RiskAssessment:
                                            classify_destination(connection.local.ip) == "INTERNET")
         if exposed:
             port = connection.local.port
-            windows_pattern = connection.pid is not None and (
-                (connection.protocol == "UDP" and name in {"svchost.exe", "system"}
-                 and port in WINDOWS_UDP_PORTS)
-                or (connection.protocol == "TCP" and name in WINDOWS_RPC_NAMES
-                    and (port == 135 or 49152 <= port <= 65535))
-                or (connection.protocol == "TCP" and name == "system" and port in {139, 445})
-            )
+            windows_pattern = is_routine_windows_activity(connection)
             if windows_pattern:
                 reasons.append(RiskReason("Common Windows service binding pattern; name/port hints are not identity verification", 5))
             elif connection.protocol == "UDP":
