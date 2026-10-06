@@ -5,6 +5,8 @@ import ipaddress
 from queue import Empty, Full, Queue
 import subprocess
 import sys
+from pathlib import Path
+import tempfile
 from threading import Event, Lock, Thread
 import time
 
@@ -14,12 +16,18 @@ def reverse_lookup(ip: str, timeout: float = 2) -> str | None:
         address = str(ipaddress.ip_address(ip.split("%", 1)[0]))
         # The OS resolver has no per-call timeout. Isolate only this lookup in
         # a hidden helper so timeout reaps our own child, never a monitored PID.
-        result = subprocess.run(
-            [sys.executable, "-c", "import socket,sys; print(socket.gethostbyaddr(sys.argv[1])[0])", address],
-            capture_output=True, text=True, timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        hostname = result.stdout.strip()[:253]
+        options = dict(capture_output=True, text=True, timeout=timeout,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if getattr(sys, "frozen", False):
+            # sys.executable is Sentinal.exe when frozen, not a Python interpreter.
+            with tempfile.TemporaryDirectory(prefix="sentinal-dns-") as directory:
+                output = Path(directory) / "hostname.txt"
+                result = subprocess.run([sys.executable, "--sentinal-resolve", address, str(output)], **options)
+                hostname = output.read_text(encoding="utf-8").strip()[:253] if output.exists() else ""
+        else:
+            result = subprocess.run(
+                [sys.executable, "-c", "import socket,sys; print(socket.gethostbyaddr(sys.argv[1])[0])", address], **options)
+            hostname = result.stdout.strip()[:253]
         if result.returncode == 0 and hostname and all(character.isprintable() and not character.isspace() for character in hostname):
             return hostname
     except (OSError, ValueError, subprocess.TimeoutExpired):

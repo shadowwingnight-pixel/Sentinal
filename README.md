@@ -1,10 +1,61 @@
 # Sentinal
 
-Version 0.6: a Windows-focused Python 3.13+ monitor for the local machine's
+Stable Windows release 0.6.0: a Windows-focused Python 3.13+ monitor for the local machine's
 TCP/UDP sockets, with the existing CLI and a native CustomTkinter dashboard.
 Runtime dependencies are psutil and CustomTkinter (plus its small dependencies).
 
-## Setup (PowerShell)
+Sentinal is a passive heuristic network monitor, **not an antivirus**. It does
+not block threats, verify that applications are safe, or replace endpoint protection.
+
+## Windows executable
+
+Launch `dist/Sentinal.exe` by double-clicking it, or run:
+
+```powershell
+.\dist\Sentinal.exe
+```
+
+The single executable includes Python, psutil, Tcl/Tk and CustomTkinter assets;
+no Python installation is needed on the target Windows PC. Normal launch opens
+the GUI without a console. Monitoring starts automatically. Use Start/Stop or
+close the window normally to shut down. First launch may take a few seconds
+while PyInstaller extracts bundled runtime assets to a temporary directory.
+The executable is unsigned. No GitHub Release is created by the build script.
+
+Logs are created at runtime under `logs/` in the working directory, as in Python
+mode; use a writable working directory. Application logs, credentials, `.env`
+files, tests and repository development files are not bundled. Write errors
+remain nonfatal. The frozen DNS adapter preserves bounded resolution: it
+reuses Sentinal.exe in a hidden helper mode and returns a hostname through a
+temporary file, without requiring a separately installed Python interpreter.
+
+## Build on Windows
+
+Use standard 64-bit CPython 3.13 (the validated build environment), with Tk
+support. Create `.venv` as below, then:
+
+```powershell
+.\scripts\build_windows.ps1
+.\scripts\smoke_windows.ps1
+```
+
+The build script installs pinned inputs from `requirements-build.txt`, installs
+the source package, runs the complete unit suite and stops on failure. It then
+cleans only this repository's `build/` and `dist/`, and runs PyInstaller with
+`--onefile --windowed --collect-data customtkinter`. The output is
+`dist/Sentinal.exe`. Generated specs remain under ignored `build/`; no generated
+artifacts are committed. Reproducibility means pinned dependencies and scripted
+steps, not byte-identical executable output. To select another Python executable,
+pass `-Python C:\path\to\python.exe`.
+
+The executable smoke script launches the actual binary, checks its native GUI
+window and runtime JSONL events, then sends normal window close and requires
+exit code 0. Smoke history stays under ignored `build/release-smoke/`.
+Source-mode GUI checks remain available via `tests/manual_gui_smoke.py`.
+Packaging references: [PyInstaller runtime behavior](https://pyinstaller.org/en/stable/runtime-information.html)
+and [CustomTkinter assets](https://customtkinter.tomschimansky.com/documentation/packaging/).
+
+## Python development setup (PowerShell)
 
 ```powershell
 py -3.13 -m venv .venv
