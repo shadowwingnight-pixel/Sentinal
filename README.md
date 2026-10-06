@@ -1,6 +1,6 @@
 # Sentinal
 
-Version 0.2: a Windows-focused, CLI-first Python 3.13+ monitor for the local
+Version 0.3: a Windows-focused, CLI-first Python 3.13+ monitor for the local
 machine's TCP/UDP sockets. The only runtime dependency is psutil.
 
 ## Setup (PowerShell)
@@ -100,6 +100,53 @@ mail, SSH, RDP and common Windows services. They do not verify application
 protocols, encryption, ownership or legitimacy. No DNS lookup or network request
 is performed. `explain.py` owns presentation; `risk.py` owns service hints,
 address classification and scoring. No new dependencies were added.
+
+## Events, alerts and history
+
+```powershell
+.\.venv\Scripts\python.exe -m sentinal.cli --events
+.\.venv\Scripts\python.exe -m sentinal.cli --alerts
+.\.venv\Scripts\python.exe -m sentinal.cli --once --events
+.\.venv\Scripts\python.exe -m sentinal.cli --events --min-risk 30 --no-log
+```
+
+Event mode prints `NEW`, `NEW_LISTENER` (TCP listeners and bound UDP sockets),
+and `CLOSED` events. The first successful snapshot is newly observed activity,
+not proof sockets were just created. Identity uses protocol, local endpoint,
+remote endpoint, PID and listening/bound role; changing process names or TCP
+lifecycle states does not create duplicate arrivals. Identical rows are collapsed.
+Disappearance is inferred from the next successful snapshot; enumeration denial
+preserves the baseline. Closed events use the last observed metadata and score.
+A socket that disappears and later reappears produces a new arrival event.
+Snapshots cannot detect sockets that appear and disappear between polls, or
+distinguish reuse of the same PID/endpoints between polls. An unavailable PID
+that later becomes known changes identity. Tracking is in memory for each run.
+
+Alert mode shows only arrivals scoring at least 30: `WARNING` for 30-59 and
+`HIGH` for 60-100. It says "Potentially unusual network activity detected."
+Unchanged sockets and closed events never generate alerts. A score increase on
+an existing socket does not trigger a new-arrival alert. `--min-risk` filters
+display in every mode and `--once` returns after one poll. `--events` and
+`--alerts` are mutually exclusive; either takes precedence over `--explain`
+and includes explanation details. Operational warnings go to stderr even in
+alert mode. Ctrl+C exits cleanly.
+
+By default all modes append unfiltered detected events to `logs/events.jsonl`
+relative to the current working directory. The directory is created only when
+events exist. Each JSON line contains timestamp with offset, event type, process
+name, PID, protocol, local/remote endpoint objects (or null), inferred service,
+risk score, alert severity (null for non-alerts), and structured reasons with
+points. No packet contents, credentials, environment variables, or application
+payloads are collected. Socket addresses and process names are local metadata;
+`logs/` is ignored by Git. History persists across runs, but each new run starts
+a fresh baseline and may log the same currently active sockets again.
+
+`--no-log` disables history in every mode without creating a directory or file.
+Write failures report a diagnostic without stopping monitoring; failed batches
+are not retried to avoid duplicate entries and may be partially written. No
+automatic rotation is configured. `events.py` handles comparison, `alerts.py`
+handles alert selection/presentation, and `logger.py` handles allowlisted JSONL
+persistence. No new dependencies or external APIs were added.
 
 ## Scope
 

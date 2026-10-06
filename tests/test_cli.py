@@ -12,6 +12,49 @@ def snapshot(warning: str | None = None) -> Snapshot:
 
 
 class CliTests(unittest.TestCase):
+    def setUp(self):
+        logger = patch("sentinal.cli.log_events", return_value=None)
+        self.log_events = logger.start()
+        self.addCleanup(logger.stop)
+
+    def test_no_log_disables_history_in_every_mode(self):
+        row = Connection("TCP", None, Endpoint("8.8.8.8", 4444), "ESTABLISHED", None, "Unknown")
+        for mode in [[], ["--explain"], ["--events"], ["--alerts"]]:
+            with self.subTest(mode=mode), \
+                 patch("sentinal.cli.collect_snapshot", return_value=Snapshot(snapshot().timestamp, (row,))), \
+                 patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(main(["--once", "--no-log", *mode]), 0)
+        self.log_events.assert_not_called()
+
+    def test_logging_precedes_display_filter(self):
+        row = Connection("TCP", None, Endpoint("8.8.8.8", 443), "ESTABLISHED", 42, "browser.exe")
+        with patch("sentinal.cli.collect_snapshot", return_value=Snapshot(snapshot().timestamp, (row,))), \
+             patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(main(["--once", "--events", "--min-risk", "30"]), 0)
+        self.assertEqual(len(self.log_events.call_args.args[0]), 1)
+        self.assertNotIn("browser.exe", output.getvalue())
+
+    def test_alerts_only_and_duplicates(self):
+        rows = (Connection("TCP", None, Endpoint("8.8.8.8", 443), "ESTABLISHED", 42, "browser.exe"),
+                Connection("TCP", None, Endpoint("8.8.8.8", 4444), "ESTABLISHED", None, "Unknown"))
+        with patch("sentinal.cli.collect_snapshot", return_value=Snapshot(snapshot().timestamp, rows)), \
+             patch("sentinal.cli.time.sleep", side_effect=[None, KeyboardInterrupt]), \
+             patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(main(["--alerts"]), 0)
+        self.assertNotIn("browser.exe", output.getvalue())
+        self.assertEqual(output.getvalue().count("[WARNING]"), 1)
+        self.log_events.assert_called_once()
+
+    def test_logging_failure_does_not_abort_monitoring(self):
+        row = Connection("TCP", None, Endpoint("8.8.8.8", 443), "ESTABLISHED", 42, "browser.exe")
+        self.log_events.return_value = "Permission denied"
+        with patch("sentinal.cli.collect_snapshot", return_value=Snapshot(snapshot().timestamp, (row,))), \
+             patch("sys.stderr", new_callable=io.StringIO) as diagnostic, \
+             patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(main(["--once", "--events"]), 0)
+        self.assertIn("Permission denied", diagnostic.getvalue())
+        self.assertIn("[NEW]", output.getvalue())
+
     def test_invalid_risk_thresholds(self):
         for value in ["-1", "101", "abc", "3.5"]:
             with self.subTest(value=value), patch("sys.stderr", new_callable=io.StringIO):
